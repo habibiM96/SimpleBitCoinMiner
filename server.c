@@ -16,6 +16,10 @@ The port number is passed as an argument
 #include <netinet/in.h>
 #include <sys/time.h> //FD_SET, FD_ISSET, FD_ZERO macros
 #include <sys/select.h>
+#include <time.h>
+#include <stdint.h>
+#include <inttypes.h>
+#include "uint256.h"
 
 
 #define TRUE 1
@@ -26,21 +30,26 @@ The port number is passed as an argument
 #define PONG "PONG"
 #define OKAY "OKAY"
 #define PING "PING"
+#define LOG "log.txt"
 
 
-int buffer_analyser(char *buffer,int buffer_size, int socket_id);
-int main(int argc, char **argv)
-{
+int buffer_analyser(char *buffer,int buffer_size, int socket_id, FILE *log);
+FILE* logger(FILE *fp, int to_do);
+void SOLN_parser(char *line);
+
+int main(int argc, char **argv){
+	FILE *log;
 	int opt = TRUE;
 	int listener_socket = -1, clilen = -1, new_sockfd = -1, client_socks[MAX_CLIENT],
-	activity = 0, client_count = 0, value_read = -1, i = 0, server_portno, max_sd = 0;
+	activity = 0, value_read = -1, i = 0, server_portno, max_sd = 0;
 
 	char buffer[MAX_BUFFER];
 	char ERROR[MAX_ERROR];
 	struct sockaddr_in serv_addr, cli_addr;
 
 	fd_set client_read_fds; //set of sockets descriptors
-
+	log = fopen(LOG, "w");
+	fclose(log);
 	//initialise all client sockets to 0 so not checked
 	for(i = 0; i < MAX_CLIENT; i++){
 		client_socks[i] = 0;
@@ -130,6 +139,11 @@ int main(int argc, char **argv)
 				perror("ERROR on accept");
 				exit(EXIT_FAILURE);
 			}
+			log = logger(log, 1);
+			//printf("1\n");
+			fprintf(log, "New Connection, Socket fd: %d , client IP:  %s\n" , new_sockfd , inet_ntoa(cli_addr.sin_addr));
+			//printf("2\n");
+			log = logger(log, 0);
 
 			for(i = 0; i < MAX_CLIENT; i++){
 				//adding the new socket to the list
@@ -151,6 +165,12 @@ int main(int argc, char **argv)
 				if( value_read == 0){
 					//client disconnected
 					printf("closing client \n");
+					log = logger(log,1);
+					///printf("3\n");
+					fprintf(log, "Client socket: %d disconnected , Client IP: %s\n" ,client_socks[i], inet_ntoa(cli_addr.sin_addr));
+					//printf("4\n");
+					log = logger(log, 0);
+
 					close(client_socks[i]);
 					client_socks[i] = 0;
 				} else if (value_read < 0){
@@ -161,7 +181,13 @@ int main(int argc, char **argv)
 					buffer[value_read] = '\0';
 					//buffer_analyser(buffer, value_read);
 					printf("Writing message back\n");
-					buffer_analyser(buffer, value_read, client_socks[i]);
+					log = logger(log, 1);
+					//printf("5\n");
+					fprintf(log, "Socket fd: %d , client IP: %s\n" , client_socks[i] , inet_ntoa(cli_addr.sin_addr));
+					//printf("6\n");
+					buffer_analyser(buffer, value_read, client_socks[i], log);
+					log = logger(log, 0);
+					//buffer_analyser(buffer, value_read, client_socks[i], log);
 					//value_read = write(client_socks[i], buffer, value_read);
 				}
 			}
@@ -171,10 +197,12 @@ int main(int argc, char **argv)
 	return 0;
 }
 
-int buffer_analyser(char *buffer, int buffer_size, int sock_id){
+int buffer_analyser(char *buffer, int buffer_size, int sock_id, FILE *log){
 	int value_read = 0;
-	int i = 0;
+	//int i = 0;
 	char *token;
+	char message[5];
+	memset(message, '\0', 5);
 	/*for(i = 0; i < buffer_size; i++){
 		if(buffer[i] == '\r'){
 			printf("Found CR || ");
@@ -183,36 +211,123 @@ int buffer_analyser(char *buffer, int buffer_size, int sock_id){
 			printf("found NL\n");
 		}
 	}*/
-    const char delim[3] = "\r\n";
+    //const char delim[3] = "\r\n";
     token = strtok(buffer, "\r\n");
     while(token){
-        //strncpy(msg, token, 4);
-		printf("token: %s && size: %d\n",token, strlen(token));
+        strncpy(message, token, 4);
+		//printf("token: %s && size: %d\n",token, strlen(token));
 		//printf("msg: %s\n",msg);
 
         if((strncmp(token, PING, 4) == 0) && (strlen(token) == 4)){
 			value_read = write(sock_id, "PONG\r\n", 6);
+			fprintf(log, "SSTP message: %s\n", message);
 			printf("token1\n");
 		} else if ((strncmp(token, PONG, 4) == 0) && (strlen(token) == 4)){
 			printf("token2\n");
 			value_read = write(sock_id, "ERRO Only Server can send PONG\r\n", 32);
+			fprintf(log, "SSTP message: %s\n", message);
 		} else if ((strncmp(token, OKAY, 4) == 0) && (strlen(token) == 4)){
 			printf("token3\n");
 			value_read = write(sock_id, "ERRO Only Sever can send OKAY\r\n", 32);
+			fprintf(log, "SSTP message: %s\n", message);
 		} else if ((strncmp(token, "ERRO", 4) == 0) && (strlen(token) == 4)){
 			printf("token4\n");
             value_read = write(sock_id, "ERRO must not be sent to the server\r\n", 37);
+			fprintf(log, "SSTP message: %s\n", message);
 		} else if(strncmp(token, "SOLN", 4) == 0){
+			fprintf(log, "SSTP message: %s\n", message);
+			if(strlen(token) <= 5){
+				printf("worng message\n");
+				token = strtok(NULL, "\r\n");
+				continue;
+			}
 			printf("SOlution Found\r\n");
+			SOLN_parser(token);
 		} else if(strncmp(token, "WORK", 4) == 0){
+			fprintf(log, "SSTP message: %s\n", message);
 			printf("Work Found\r\n");
 		} else if(strncmp(token, "ABRT", 4) == 0){
+			fprintf(log, "SSTP message: %s\n", message);
 			printf("ABRT Found\r\n");
 		} else {
+			fprintf(log, "SSTP message: %s\n", message);
 			printf("ERRO Message not correct\r\n");
 		}
 		token = strtok(NULL, "\r\n");
 		fflush(stdout);
     }
 	return 0;
+}
+
+
+FILE* logger(FILE *fp, int to_do){
+	//printf("Hello\n");
+	if(to_do){
+		//open file to write
+		//printf("hel\n");
+		fp = fopen(LOG, "a");
+		//printf("1\n");
+		if(!fp){
+			printf("Couldn't log\n");
+			exit(EXIT_FAILURE);
+		}
+		//printf("56\n");
+		time_t rawtime;
+		struct tm *info;
+		//char buffer[80];
+
+		time( &rawtime );
+		info = localtime( &rawtime );
+		fprintf(fp,"Time: %s", asctime(info));
+	} else {
+		fprintf(fp,"\n-----------------------------\n\n");
+		fclose(fp);
+	}
+	return fp;
+}
+
+
+void SOLN_parser(char *line){
+	uint32_t target;
+	uint64_t difficulty, nonce;
+	char *lineStart = line + 5; // where the difficulty starts
+
+	//reading in the difficulty
+	sscanf(lineStart, "%x\n", &target);
+	printf("Number: %" PRIu32 "\n",target);
+
+	//seed parsing
+	lineStart = line + 14; //where the seed starts
+	BYTE seed[32];
+	int i = 0;
+	while(i < 32){
+		sscanf(lineStart, "%2hhx", &seed[i]);
+		lineStart += 2;
+		i++;
+	}
+	print_uint256(seed);
+
+	//getting the nonce for the prrof of work
+	sscanf((lineStart+1), "%lx", &nonce);
+	printf("NONCE: %lx \n",nonce);
+
+	BYTE NONCE[8];
+	i = 0;
+	lineStart += 1;
+	while(i < 8){
+		sscanf(lineStart, "%2hhx", &NONCE[i]);
+		lineStart += 2;
+		i++;
+	}
+
+	print_uint256(NONCE);
+
+	//target manipulation
+	uint32_t copy = target;
+	unsigned int alpha = (copy >> 24);
+	printf("alpha; %d\n\n", alpha);
+	copy = target;
+	unsigned int beta = (copy << 8);
+	beta = (beta >> 8);
+	printf("beta: %d\n\n", beta);
 }
