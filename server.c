@@ -20,6 +20,7 @@ The port number is passed as an argument
 #include <stdint.h>
 #include <inttypes.h>
 #include "uint256.h"
+#include "sha256.h"
 
 
 #define TRUE 1
@@ -36,6 +37,8 @@ The port number is passed as an argument
 int buffer_analyser(char *buffer,int buffer_size, int socket_id, FILE *log);
 FILE* logger(FILE *fp, int to_do);
 void SOLN_parser(char *line);
+void print_uint26(BYTE *uint256, size_t length);
+void uint_init(BYTE *uint320, size_t length);
 
 int main(int argc, char **argv){
 	FILE *log;
@@ -288,13 +291,56 @@ FILE* logger(FILE *fp, int to_do){
 
 
 void SOLN_parser(char *line){
-	uint32_t target;
-	uint64_t difficulty, nonce;
+	uint32_t difficulty;
 	char *lineStart = line + 5; // where the difficulty starts
 
 	//reading in the difficulty
-	sscanf(lineStart, "%x\n", &target);
-	printf("Number: %" PRIu32 "\n",target);
+	sscanf(lineStart, "%x\n", &difficulty);
+	printf("Number: %" PRIu32 "\n",difficulty);
+
+	//getting alpha
+	uint32_t copy = difficulty;
+	uint32_t alpha = (copy >> 24); //getting the first 8 bits
+	printf("alpha; %d\n\n", alpha);
+
+	/*BYTE alpha1[1];
+	sscanf(lineStart, "%2hhx", &alpha1[0]);
+	print_uint2(alpha1);*/
+
+	//getting beta
+	BYTE beta1[32];
+	uint256_init(beta1);
+	lineStart += 2;
+	int j = 29;
+	while(j < 32){
+		sscanf(lineStart, "%2hhx", &beta1[j]);
+		lineStart += 2;
+		j++;
+	}
+	/*printf("beta: ");
+	print_uint25(beta1);
+	printf("\n");*/
+
+	//target calculation
+	BYTE base[32];
+	uint256_init(base);
+
+	base[31] = 0x2;
+
+	BYTE res[32];
+	uint256_init(res);
+	uint32_t expo = 8*(alpha - 3);
+	uint256_exp(res, base, expo);
+	//print_uint256(res);
+
+	BYTE target[32];
+	uint256_init(target);
+
+	uint256_mul(target, beta1, res);
+	/*printf("target: ");
+	print_uint256(target);
+	printf("\n");*/
+
 
 	//seed parsing
 	lineStart = line + 14; //where the seed starts
@@ -307,11 +353,14 @@ void SOLN_parser(char *line){
 	}
 	print_uint256(seed);
 
+
 	//getting the nonce for the prrof of work
+	uint64_t nonce;
 	sscanf((lineStart+1), "%lx", &nonce);
 	printf("NONCE: %lx \n",nonce);
 
 	BYTE NONCE[8];
+	uint_init(NONCE, 8);
 	i = 0;
 	lineStart += 1;
 	while(i < 8){
@@ -320,14 +369,61 @@ void SOLN_parser(char *line){
 		i++;
 	}
 
-	print_uint256(NONCE);
+	//concatenation of seed and nonce
+	BYTE solution[40];
+	uint_init(solution, 40);
+	for(i = 0; i < 40; i++){
+		if(i < 32){
+			solution[i] = seed[i];
+		} else {
+			solution[i] = NONCE[i -32];
+		}
+	}
+	printf("solution: \n");
+	print_uint26(solution, 40);
 
-	//target manipulation
-	uint32_t copy = target;
-	unsigned int alpha = (copy >> 24);
-	printf("alpha; %d\n\n", alpha);
-	copy = target;
-	unsigned int beta = (copy << 8);
-	beta = (beta >> 8);
-	printf("beta: %d\n\n", beta);
+	BYTE stHash[32];
+	uint256_init(stHash);
+
+	SHA256_CTX ctx;
+	sha256_init(&ctx);
+	sha256_update(&ctx, solution, 40);
+	sha256_final(&ctx, stHash);
+	printf("1st hash: \n");
+	print_uint256(stHash);
+
+	BYTE ndHash[32];
+	uint256_init(ndHash);
+	sha256_init(&ctx);
+	sha256_update(&ctx, stHash, 32);
+	sha256_final(&ctx, ndHash);
+
+	print_uint256(target);
+	print_uint256(ndHash);
+	if(sha256_compare(target, ndHash) == 1){
+		printf("\nhooray!\n");
+	} else {
+		printf("nope\n");
+	}
+}
+
+
+void print_uint26 (BYTE *uint256, size_t length) {
+    printf ("0x");
+    size_t i = 0;
+    for (i = 0; i < length; i++) {
+        printf ("%02x", uint256[i]);
+    }
+    printf("\n");
+}
+
+void uint_init(BYTE *uint320, size_t length){
+	if (uint320 == NULL) {
+        return;
+    }
+
+	size_t i = 0;
+	for (i = 0; i < length; i++){
+		uint320[i] = 0;
+	}
 }
