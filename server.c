@@ -36,7 +36,7 @@ The port number is passed as an argument
 
 int buffer_analyser(char *buffer,int buffer_size, int socket_id, FILE *log);
 FILE* logger(FILE *fp, int to_do);
-void SOLN_parser(char *line);
+int SOLN_parser(char *line);
 void print_uint26(BYTE *uint256, size_t length);
 void uint_init(BYTE *uint320, size_t length);
 
@@ -204,8 +204,8 @@ int buffer_analyser(char *buffer, int buffer_size, int sock_id, FILE *log){
 	int value_read = 0;
 	//int i = 0;
 	char *token;
-	char message[5];
-	memset(message, '\0', 5);
+	//char message[5];
+	//memset(message, '\0', 5);
 	/*for(i = 0; i < buffer_size; i++){
 		if(buffer[i] == '\r'){
 			printf("Found CR || ");
@@ -217,43 +217,57 @@ int buffer_analyser(char *buffer, int buffer_size, int sock_id, FILE *log){
     //const char delim[3] = "\r\n";
     token = strtok(buffer, "\r\n");
     while(token){
-        strncpy(message, token, 4);
+        //strncpy(token, token, 4);
 		//printf("token: %s && size: %d\n",token, strlen(token));
 		//printf("msg: %s\n",msg);
 
         if((strncmp(token, PING, 4) == 0) && (strlen(token) == 4)){
 			value_read = write(sock_id, "PONG\r\n", 6);
-			fprintf(log, "SSTP message: %s\n", message);
+			fprintf(log, "SSTP message: %s\n", token);
 			printf("token1\n");
+
 		} else if ((strncmp(token, PONG, 4) == 0) && (strlen(token) == 4)){
 			printf("token2\n");
 			value_read = write(sock_id, "ERRO Only Server can send PONG\r\n", 32);
-			fprintf(log, "SSTP message: %s\n", message);
+			fprintf(log, "SSTP message: %s\n", token);
+
 		} else if ((strncmp(token, OKAY, 4) == 0) && (strlen(token) == 4)){
 			printf("token3\n");
-			value_read = write(sock_id, "ERRO Only Sever can send OKAY\r\n", 32);
-			fprintf(log, "SSTP message: %s\n", message);
+			value_read = write(sock_id, "ERRO Only Sever can send OKAY\r\n", 31);
+			fprintf(log, "SSTP message: %s\n", token);
+
 		} else if ((strncmp(token, "ERRO", 4) == 0) && (strlen(token) == 4)){
 			printf("token4\n");
             value_read = write(sock_id, "ERRO must not be sent to the server\r\n", 37);
-			fprintf(log, "SSTP message: %s\n", message);
+			fprintf(log, "SSTP message: %s\n", token);
+
 		} else if(strncmp(token, "SOLN", 4) == 0){
-			fprintf(log, "SSTP message: %s\n", message);
+			fprintf(log, "SSTP message: %s\n", token);
 			if(strlen(token) <= 5){
 				printf("worng message\n");
+				value_read = write(sock_id, "ERRO message is not complete\r\n", 30);
 				token = strtok(NULL, "\r\n");
 				continue;
 			}
-			printf("SOlution Found\r\n");
-			SOLN_parser(token);
+			//printf("SOlution Found\r\n");
+			if(SOLN_parser(token)){
+				value_read = write(sock_id, "OKAY\r\n", 6);
+			} else {
+				value_read = write(sock_id, "ERRO The proof of work was incorrect\r\n", 38);
+			}
+			//fprintf(log, "SSTP message: %s\n", token);
+
 		} else if(strncmp(token, "WORK", 4) == 0){
-			fprintf(log, "SSTP message: %s\n", message);
+			fprintf(log, "SSTP message: %s\n", token);
 			printf("Work Found\r\n");
 		} else if(strncmp(token, "ABRT", 4) == 0){
-			fprintf(log, "SSTP message: %s\n", message);
+			fprintf(log, "SSTP message: %s\n", token);
 			printf("ABRT Found\r\n");
+			value_read = write(sock_id, "OKAY\r\n", 6);
+
 		} else {
-			fprintf(log, "SSTP message: %s\n", message);
+			fprintf(log, "SSTP message: %s\n", token);
+			value_read = write(sock_id, "ERRO Message was not correct\r\n", 30);
 			printf("ERRO Message not correct\r\n");
 		}
 		token = strtok(NULL, "\r\n");
@@ -290,18 +304,18 @@ FILE* logger(FILE *fp, int to_do){
 }
 
 
-void SOLN_parser(char *line){
+int SOLN_parser(char *line){
 	uint32_t difficulty;
 	char *lineStart = line + 5; // where the difficulty starts
 
 	//reading in the difficulty
 	sscanf(lineStart, "%x\n", &difficulty);
-	printf("Number: %" PRIu32 "\n",difficulty);
+	//printf("Number: %" PRIu32 "\n",difficulty);
 
 	//getting alpha
 	uint32_t copy = difficulty;
 	uint32_t alpha = (copy >> 24); //getting the first 8 bits
-	printf("alpha; %d\n\n", alpha);
+	//printf("alpha; %d\n\n", alpha);
 
 	/*BYTE alpha1[1];
 	sscanf(lineStart, "%2hhx", &alpha1[0]);
@@ -351,13 +365,13 @@ void SOLN_parser(char *line){
 		lineStart += 2;
 		i++;
 	}
-	print_uint256(seed);
+	//print_uint256(seed);
 
 
 	//getting the nonce for the prrof of work
 	uint64_t nonce;
 	sscanf((lineStart+1), "%lx", &nonce);
-	printf("NONCE: %lx \n",nonce);
+	//printf("NONCE: %lx \n",nonce);
 
 	BYTE NONCE[8];
 	uint_init(NONCE, 8);
@@ -379,8 +393,8 @@ void SOLN_parser(char *line){
 			solution[i] = NONCE[i -32];
 		}
 	}
-	printf("solution: \n");
-	print_uint26(solution, 40);
+	//printf("solution: \n");
+	//print_uint26(solution, 40);
 
 	BYTE stHash[32];
 	uint256_init(stHash);
@@ -389,8 +403,8 @@ void SOLN_parser(char *line){
 	sha256_init(&ctx);
 	sha256_update(&ctx, solution, 40);
 	sha256_final(&ctx, stHash);
-	printf("1st hash: \n");
-	print_uint256(stHash);
+	//printf("1st hash: \n");
+	//print_uint256(stHash);
 
 	BYTE ndHash[32];
 	uint256_init(ndHash);
@@ -398,12 +412,14 @@ void SOLN_parser(char *line){
 	sha256_update(&ctx, stHash, 32);
 	sha256_final(&ctx, ndHash);
 
-	print_uint256(target);
-	print_uint256(ndHash);
+	//print_uint256(target);
+	//print_uint256(ndHash);
 	if(sha256_compare(target, ndHash) == 1){
-		printf("\nhooray!\n");
+		//printf("\nhooray!\n");
+		return 1;
 	} else {
-		printf("nope\n");
+		//printf("nope\n");
+		return 0;
 	}
 }
 
