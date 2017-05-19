@@ -21,17 +21,28 @@ The port number is passed as an argument
 #include <inttypes.h>
 #include "uint256.h"
 #include "sha256.h"
+#include <assert.h>
 
+typedef struct{
+    uint32_t difficulty;
+	uint32_t alpha;
+    BYTE beta[32];
+	BYTE target[32];
+    BYTE seed[32];
+    BYTE start_nonce[32];
+    int client_sock_id;
+} work_t;
 
 #define TRUE 1
 #define FALSE 0
-#define MAX_ERROR 64
+#define MAX_ERROR 40
 #define MAX_CLIENT 100
 #define MAX_BUFFER 256
 #define PONG "PONG"
 #define OKAY "OKAY"
 #define PING "PING"
 #define LOG "log.txt"
+#define MAX_WORK 10
 
 
 int buffer_analyser(char *buffer,int buffer_size, int socket_id, FILE *log);
@@ -39,6 +50,8 @@ FILE* logger(FILE *fp, int to_do);
 int SOLN_parser(char *line);
 void print_uint26(BYTE *uint256, size_t length);
 void uint_init(BYTE *uint320, size_t length);
+int hash_checker(BYTE *solution, BYTE *target);
+void WORK_parser(char *line, int client_sock);
 
 int main(int argc, char **argv){
 	FILE *log;
@@ -259,7 +272,14 @@ int buffer_analyser(char *buffer, int buffer_size, int sock_id, FILE *log){
 
 		} else if(strncmp(token, "WORK", 4) == 0){
 			fprintf(log, "SSTP message: %s\n", token);
-			printf("Work Found\r\n");
+			//printf("Work Found\r\n");
+			if(strlen(token) <= 5){
+				printf("worng message\n");
+				value_read = write(sock_id, "ERRO message is not complete\r\n", 30);
+				token = strtok(NULL, "\r\n");
+				continue;
+			}
+			WORK_parser(token, sock_id);
 		} else if(strncmp(token, "ABRT", 4) == 0){
 			fprintf(log, "SSTP message: %s\n", token);
 			printf("ABRT Found\r\n");
@@ -305,17 +325,18 @@ FILE* logger(FILE *fp, int to_do){
 
 
 int SOLN_parser(char *line){
-	uint32_t difficulty;
+	uint32_t diff;
 	char *lineStart = line + 5; // where the difficulty starts
 
 	//reading in the difficulty
-	sscanf(lineStart, "%x\n", &difficulty);
+	sscanf(lineStart, "%x\n", &diff);
 	//printf("Number: %" PRIu32 "\n",difficulty);
 
 	//getting alpha
-	uint32_t copy = difficulty;
+	uint32_t copy = diff;
 	uint32_t alpha = (copy >> 24); //getting the first 8 bits
 	//printf("alpha; %d\n\n", alpha);
+
 
 	/*BYTE alpha1[1];
 	sscanf(lineStart, "%2hhx", &alpha1[0]);
@@ -352,7 +373,7 @@ int SOLN_parser(char *line){
 
 	uint256_mul(target, beta1, res);
 	/*printf("target: ");
-	print_uint256(target);
+	//print_uint256(target);
 	printf("\n");*/
 
 
@@ -367,21 +388,22 @@ int SOLN_parser(char *line){
 	}
 	//print_uint256(seed);
 
-
 	//getting the nonce for the prrof of work
 	uint64_t nonce;
 	sscanf((lineStart+1), "%lx", &nonce);
 	//printf("NONCE: %lx \n",nonce);
 
-	BYTE NONCE[8];
-	uint_init(NONCE, 8);
-	i = 0;
+	BYTE NONCE[32];
+	uint256_init(NONCE);
+	//uint_init(NONCE, 8);
+	i = 24;
 	lineStart += 1;
-	while(i < 8){
+	while(i < 32){
 		sscanf(lineStart, "%2hhx", &NONCE[i]);
 		lineStart += 2;
 		i++;
 	}
+	//print_uint256(NONCE);
 
 	//concatenation of seed and nonce
 	BYTE solution[40];
@@ -390,31 +412,35 @@ int SOLN_parser(char *line){
 		if(i < 32){
 			solution[i] = seed[i];
 		} else {
-			solution[i] = NONCE[i -32];
+			solution[i] = NONCE[i - 8];
 		}
 	}
 	//printf("solution: \n");
 	//print_uint26(solution, 40);
 
-	BYTE stHash[32];
-	uint256_init(stHash);
+	return hash_checker(solution, target);
+}
+
+int hash_checker(BYTE *solution, BYTE *target){
+	BYTE hash1[32];
+	uint256_init(hash1);
 
 	SHA256_CTX ctx;
 	sha256_init(&ctx);
 	sha256_update(&ctx, solution, 40);
-	sha256_final(&ctx, stHash);
+	sha256_final(&ctx, hash1);
 	//printf("1st hash: \n");
-	//print_uint256(stHash);
+	//print_uint256(hash1);
 
-	BYTE ndHash[32];
-	uint256_init(ndHash);
+	BYTE hash2[32];
+	uint256_init(hash2);
 	sha256_init(&ctx);
-	sha256_update(&ctx, stHash, 32);
-	sha256_final(&ctx, ndHash);
+	sha256_update(&ctx, hash1, 32);
+	sha256_final(&ctx, hash2);
 
 	//print_uint256(target);
-	//print_uint256(ndHash);
-	if(sha256_compare(target, ndHash) == 1){
+	//print_uint256(hash2);
+	if(sha256_compare(target, hash2) == 1){
 		//printf("\nhooray!\n");
 		return 1;
 	} else {
@@ -422,8 +448,6 @@ int SOLN_parser(char *line){
 		return 0;
 	}
 }
-
-
 void print_uint26 (BYTE *uint256, size_t length) {
     printf ("0x");
     size_t i = 0;
@@ -442,4 +466,69 @@ void uint_init(BYTE *uint320, size_t length){
 	for (i = 0; i < length; i++){
 		uint320[i] = 0;
 	}
+}
+
+void WORK_parser(char *line, int client_sock){
+	work_t *work = NULL;
+	work = (void *) malloc (sizeof(work_t));
+	assert(work != NULL);
+
+	char *lineStart = line + 5; // where the difficulty starts
+	sscanf(lineStart, "%x", &(work->difficulty));
+	printf("Difficulty: %x\n", work->difficulty);
+
+	work->alpha = work->difficulty >> 24;
+	printf("Difficulty: %x\n", work->alpha);
+
+	//beta processing
+	uint256_init(work->beta);
+	int i = 29;
+	lineStart += 2;
+	while(i < 32){
+		sscanf(lineStart, "%2hhx", &(work->beta[i]));
+		i++;
+		lineStart += 2;
+	}
+	printf("beta: \n");
+	print_uint256(work->beta);
+
+	//processing target
+	BYTE base[32];
+	uint256_init(base);
+	base[31] = 0x2;
+
+	BYTE res[32];
+	uint256_init(res);
+	uint32_t expo = 8*(work->alpha - 3);
+	uint256_exp(res, base, expo);
+
+	uint256_init(work->target);
+	uint256_mul(work->target, work->beta, res);
+	printf("target: \n");
+	print_uint256(work->target);
+
+	//seed processing
+	uint256_init(work->seed);
+	i = 0;
+	lineStart = 14 + line;
+	while(i < 32){
+		sscanf(lineStart, "%2hhx", &(work->seed[i]));
+		lineStart += 2;
+		i++;
+	}
+	printf("seed: \n");
+	print_uint256(work->seed);
+
+	//processing nonce
+	uint256_init(work->start_nonce);
+	i = 24;
+	lineStart += 1;
+	while(i < 32){
+		sscanf(lineStart, "%2hhx", &(work->start_nonce[i]));
+		lineStart += 2;
+		i++;
+	}
+	printf("nonce: \n");
+	print_uint256(work->start_nonce);
+	work->client_sock_id = client_sock;
 }
