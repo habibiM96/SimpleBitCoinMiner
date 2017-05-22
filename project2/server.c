@@ -16,22 +16,14 @@ The port number is passed as an argument
 #include <netinet/in.h>
 #include <sys/time.h> //FD_SET, FD_ISSET, FD_ZERO macros
 #include <sys/select.h>
-#include <time.h>
 #include <stdint.h>
 #include <inttypes.h>
-#include "uint256.h"
+//#include "uint256.h"
 #include "sha256.h"
 #include <assert.h>
-
-typedef struct{
-    uint32_t difficulty;
-	uint32_t alpha;
-    BYTE beta[32];
-	BYTE target[32];
-    BYTE seed[32];
-    BYTE start_nonce[32];
-    int client_sock_id;
-} work_t;
+#include <pthread.h>
+#include "list.h"
+//#include "datastruct.h"
 
 #define TRUE 1
 #define FALSE 0
@@ -44,6 +36,8 @@ typedef struct{
 #define LOG "log.txt"
 #define MAX_WORK 10
 
+list_t *work_queue;
+
 
 int buffer_analyser(char *buffer,int buffer_size, int socket_id, FILE *log);
 FILE* logger(FILE *fp, int to_do);
@@ -52,6 +46,8 @@ void print_uint26(BYTE *uint256, size_t length);
 void uint_init(BYTE *uint320, size_t length);
 int hash_checker(BYTE *solution, BYTE *target);
 void WORK_parser(char *line, int client_sock);
+void send_client_Message(work_t work);
+void *work_func();
 
 int main(int argc, char **argv){
 	FILE *log;
@@ -70,13 +66,13 @@ int main(int argc, char **argv){
 	for(i = 0; i < MAX_CLIENT; i++){
 		client_socks[i] = 0;
 	}
-
 	//receiving the port number for server from user
 	if (argc < 2){
 		fprintf(stderr,"ERROR, no port provided\n");
 		exit(1);
 	}
 
+	work_queue = make_empty_list();
 	 /* Create TCP socket */
 	listener_socket = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -279,7 +275,12 @@ int buffer_analyser(char *buffer, int buffer_size, int sock_id, FILE *log){
 				token = strtok(NULL, "\r\n");
 				continue;
 			}
-			WORK_parser(token, sock_id);
+			if(work_queue->foot && work_queue->foot->queue_no >= 10){
+				write(sock_id, "ERRO work_queue is full\r\n",strlen("ERRO work_queue is full\r\n"));
+			}else {
+				WORK_parser(token, sock_id);
+			}
+
 		} else if(strncmp(token, "ABRT", 4) == 0){
 			fprintf(log, "SSTP message: %s\n", token);
 			printf("ABRT Found\r\n");
@@ -475,10 +476,10 @@ void WORK_parser(char *line, int client_sock){
 
 	char *lineStart = line + 5; // where the difficulty starts
 	sscanf(lineStart, "%x", &(work->difficulty));
-	printf("Difficulty: %x\n", work->difficulty);
+	//printf("Difficulty: %x\n", work->difficulty);
 
 	work->alpha = work->difficulty >> 24;
-	printf("Difficulty: %x\n", work->alpha);
+	//printf("Difficulty: %x\n", work->alpha);
 
 	//beta processing
 	uint256_init(work->beta);
@@ -489,8 +490,8 @@ void WORK_parser(char *line, int client_sock){
 		i++;
 		lineStart += 2;
 	}
-	printf("beta: \n");
-	print_uint256(work->beta);
+	//printf("beta: \n");
+	//print_uint256(work->beta);
 
 	//processing target
 	BYTE base[32];
@@ -504,8 +505,8 @@ void WORK_parser(char *line, int client_sock){
 
 	uint256_init(work->target);
 	uint256_mul(work->target, work->beta, res);
-	printf("target: \n");
-	print_uint256(work->target);
+	//printf("target: \n");
+	//print_uint256(work->target);
 
 	//seed processing
 	uint256_init(work->seed);
@@ -516,8 +517,8 @@ void WORK_parser(char *line, int client_sock){
 		lineStart += 2;
 		i++;
 	}
-	printf("seed: \n");
-	print_uint256(work->seed);
+	//printf("seed: \n");
+	//print_uint256(work->seed);
 
 	//processing nonce
 	uint256_init(work->start_nonce);
@@ -528,7 +529,115 @@ void WORK_parser(char *line, int client_sock){
 		lineStart += 2;
 		i++;
 	}
-	printf("nonce: \n");
-	print_uint256(work->start_nonce);
+	//printf("nonce: \n");
+	//print_uint256(work->start_nonce);
+
+	//getting number of threads on the work
+	lineStart++;
+	sscanf(lineStart, "%d", &work->work_no);
+	//printf("work no: %d\n", work->work_no);
 	work->client_sock_id = client_sock;
+	work->abrt = 0;
+	insert_at_foot(work_queue, *work);
+	update_queue_no(work_queue);
+	//printf("1\n");
+	work_func();
+	//update_queue_no(work_queue);
+}
+
+
+void *work_func(){
+	assert(work_queue != NULL);
+    BYTE add_1[32];
+	uint256_init(add_1);
+	add_1[31] = 0x1;
+	//printf("2\n");
+	BYTE solution[40];
+	bzero(solution,40);
+
+	work_t work;
+	int sol_found = 0, i = 0;
+	int j = 0;
+	while(j < 10){
+		//printf("3\n");
+		j++;
+		if(!is_empty_list(work_queue)){
+			work = get_head(work_queue);
+
+			if(work.abrt){
+				//free(work);
+				update_queue_no(work_queue);
+				continue;
+			}
+			uint256_init(solution);
+
+			sol_found = 0;
+			for(i = 0; i < 32; i++){
+				solution[i] = work.seed[i];
+			}
+
+			while(!sol_found){
+				if(work_queue->head->data.abrt){
+					work_queue = clear_queue(work_queue, work.client_sock_id);
+					//work = NULL;
+					break;
+				}
+				for(i = 32; i < 40; i++){
+					solution[i] = work.start_nonce[i - 8];
+				}
+				if(hash_checker(solution, work.target)){
+					send_client_Message(work);
+					sol_found = 1;
+					//printf("It did work\n");
+					//print_uint256(work.start_nonce);
+					//work_queue = clear_queue(work_queue);
+					work_queue = get_tail(work_queue);
+					update_queue_no(work_queue);
+				} else {
+					uint256_add(work.start_nonce, add_1, work.start_nonce);
+				}
+			}
+		}
+	}
+}
+
+
+void send_client_Message(work_t work){
+	//assert(work != NULL);
+	if(work.abrt){
+		work_queue = clear_queue(work_queue, work.client_sock_id);
+		//work = NULL;
+		return;
+	}
+	BYTE MESSAGE[98];
+	memset(MESSAGE, '\0', 98);
+	BYTE *msg_ptr = MESSAGE;
+	strncpy(msg_ptr, "SOLN ", strlen("SOLN "));
+	msg_ptr += strlen("SOLN ");
+	//write(work.client_sock_id, "IT does work!!!\r\n", 17);
+	///write(work.client_sock_id, );
+	sprintf(msg_ptr, "%x ", work.difficulty);
+	msg_ptr += 9;
+	int i = 0;
+	while(i < 32){
+		sprintf(msg_ptr, "%02x", work.seed[i]);
+		i++;
+		msg_ptr += 2;
+	}
+	//printf("char: %c", *msg_ptr);
+	//msg_ptr += 1;
+	*msg_ptr = ' ';
+	msg_ptr++;
+	i = 24;
+	while(i < 32){
+		sprintf(msg_ptr, "%02x", work.start_nonce[i]);
+		i++;
+		msg_ptr += 2;
+	}
+	*msg_ptr = '\r';
+	*(msg_ptr + 1) = '\n';
+	//MESSAGE[95] = '\r';
+	//MESSAGE[96] = '\n';
+	//printf("Message: %s", MESSAGE);
+	write(work.client_sock_id, MESSAGE, strlen(MESSAGE));
 }
