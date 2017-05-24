@@ -1,3 +1,10 @@
+/****************************************************************************
+* This is a code written by Prof. Alistair Moffat
+* The only functions added are the last 3 functions, made to suit the project
+* minor changes had to be done to suit the needs of the project, e.g data_t
+* was replaced by work_t
+****************************************************************************/
+
 #include "list.h"
 
 
@@ -67,6 +74,9 @@ list_t
 	return list;
 }
 
+/*
+* updates the number of works in the queue
+*/
 void update_queue_no(list_t *work_queue){
 	node_t *node = NULL;
 	node = work_queue->head;
@@ -78,17 +88,11 @@ void update_queue_no(list_t *work_queue){
 	}
 }
 
+/*
+*creates a new queue, which only has the works that are not aborted
+*/
 list_t *clear_queue(list_t *list, int client_id){
 	node_t *curr, *prev;
-	assert(list!=NULL);
-	curr = list->head;
-	while (curr) {
-		prev = curr;
-		curr = curr->next;
-		free(prev);
-	}
-	free(list);
-
 	list_t *new_queue;
 	new_queue = make_empty_list();
 	assert(new_queue != NULL);
@@ -104,6 +108,20 @@ list_t *clear_queue(list_t *list, int client_id){
 	return new_queue;
 }
 
+/*
+*sets the abrt flag for works belonging to client with client_socket
+*/
+void set_work_abrt(list_t *list, int client_socket){
+	node_t *curr, *prev;
+	assert(list!=NULL);
+	curr = list->head;
+	while (curr) {
+		if(curr->data.client_sock_id == client_socket){
+			curr->data.abrt = 1;
+		}
+		curr = curr->next;
+	}
+}
 
 /* =====================================================================
    Program written by Alistair Moffat, as an example for the book

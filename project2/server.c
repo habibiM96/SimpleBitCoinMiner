@@ -1,66 +1,81 @@
-/* A simple server in the internet domain using TCP
-The port number is passed as an argument
-
-
- To compile: gcc server.c -o server
+/* Project 2,
+By Ashkan Habibi,
+student ID: 758744
 */
 
+/******************************* libraries ***********************/
 #include <stdio.h>
-#include <string.h>   //strlen
+#include <string.h>
 #include <stdlib.h>
 #include <errno.h>
-#include <unistd.h>   //close
-#include <arpa/inet.h>    //close
+#include <unistd.h>
+#include <arpa/inet.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
-#include <sys/time.h> //FD_SET, FD_ISSET, FD_ZERO macros
+#include <sys/time.h>
 #include <sys/select.h>
 #include <stdint.h>
 #include <inttypes.h>
-//#include "uint256.h"
 #include "sha256.h"
 #include <assert.h>
 #include <pthread.h>
 #include "list.h"
-//#include "datastruct.h"
 
+/******************************* CONSTANTS ***********************/
 #define TRUE 1
+#define SOLN_LENGTH 98
 #define FALSE 0
+#define UINT256 32
+#define HEADER_LEN 5
 #define MAX_ERROR 40
 #define MAX_CLIENT 100
 #define MAX_BUFFER 256
-#define PONG "PONG"
-#define OKAY "OKAY"
-#define PING "PING"
-#define LOG "log.txt"
 #define MAX_WORK 10
+#define PONG "PONG\r\n"
+#define OKAY "OKAY\r\n"
+#define PING "PING"
+#define ABRT "ABRT"
+#define SOLN "SOLN"
+#define WORK "WORK"
+#define LOG "log.txt"
+#define CRLF "\r\n"
 
+
+/******************************* Global Queue ***********************/
+//the work message queue that is used by the work thread.
+//Holds up to 11 works, 1 working on adn 10 waiting
+
+// I apologise for the offensive use of a global variable,
+//I couldn't come up with a way to share the work with both
+//threads real-time and constantly
 list_t *work_queue;
 
 
+/******************************* FUnction Prototypes ***********************/
 int buffer_analyser(char *buffer,int buffer_size, int socket_id, FILE *log);
 FILE* logger(FILE *fp, int to_do);
 int SOLN_parser(char *line);
-void print_uint26(BYTE *uint256, size_t length);
 void uint_init(BYTE *uint320, size_t length);
 int hash_checker(BYTE *solution, BYTE *target);
 void WORK_parser(char *line, int client_sock);
 void send_client_Message(work_t work);
 void *work_func();
 
+
+/******************************* Functions ***********************/
 int main(int argc, char **argv){
+	pthread_t tid; // work thread ID
 	FILE *log;
 	int opt = TRUE;
 	int listener_socket = -1, clilen = -1, new_sockfd = -1, client_socks[MAX_CLIENT],
 	activity = 0, value_read = -1, i = 0, server_portno, max_sd = 0;
 
-	char buffer[MAX_BUFFER];
-	char ERROR[MAX_ERROR];
+	char buffer[MAX_BUFFER]; //buffer where  clients write their message in
 	struct sockaddr_in serv_addr, cli_addr;
 
 	fd_set client_read_fds; //set of sockets descriptors
-	log = fopen(LOG, "w");
+	log = fopen(LOG, "w");//creating and erasing the log file
 	fclose(log);
 	//initialise all client sockets to 0 so not checked
 	for(i = 0; i < MAX_CLIENT; i++){
@@ -73,6 +88,10 @@ int main(int argc, char **argv){
 	}
 
 	work_queue = make_empty_list();
+
+	//spinning up the work thread
+	pthread_create(&tid, NULL, work_func, NULL);
+
 	 /* Create TCP socket */
 	listener_socket = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -147,14 +166,14 @@ int main(int argc, char **argv){
 
 		if (FD_ISSET(listener_socket, &client_read_fds)){
 			//receiving a new connection request
-			if ((new_sockfd = accept( listener_socket, (struct sockaddr *) &cli_addr, &clilen)) < 0){
+			if ((new_sockfd = accept( listener_socket,
+					(struct sockaddr *) &cli_addr, &clilen)) < 0){
 				perror("ERROR on accept");
 				exit(EXIT_FAILURE);
 			}
 			log = logger(log, 1);
-			//printf("1\n");
-			fprintf(log, "New Connection, Socket fd: %d , client IP:  %s\n" , new_sockfd , inet_ntoa(cli_addr.sin_addr));
-			//printf("2\n");
+			fprintf(log, "New Connection, Socket fd: %d , client IP:  %s\n" ,
+					new_sockfd , inet_ntoa(cli_addr.sin_addr));
 			log = logger(log, 0);
 
 			for(i = 0; i < MAX_CLIENT; i++){
@@ -166,8 +185,8 @@ int main(int argc, char **argv){
 				}
 			}
 		}
-		bzero(buffer,MAX_BUFFER);
-		bzero(ERROR, MAX_ERROR);
+
+		bzero(buffer,MAX_BUFFER);//initialising the buffer before reading anything from it
 
 		for(i = 0; i < MAX_CLIENT; i++){
 
@@ -177,30 +196,31 @@ int main(int argc, char **argv){
 				if( value_read == 0){
 					//client disconnected
 					printf("closing client \n");
+
 					log = logger(log,1);
-					///printf("3\n");
-					fprintf(log, "Client socket: %d disconnected , Client IP: %s\n" ,client_socks[i], inet_ntoa(cli_addr.sin_addr));
-					//printf("4\n");
+					fprintf(log, "Client socket: %d disconnected , Client IP: %s\n"
+								,client_socks[i], inet_ntoa(cli_addr.sin_addr));
 					log = logger(log, 0);
 
+					set_work_abrt(work_queue, client_socks[i]);
 					close(client_socks[i]);
 					client_socks[i] = 0;
+
 				} else if (value_read < 0){
-					//receiving a message, return a response
+					//could not read anything from the buffer
 					perror("ERROR reading from socket");
 					exit(EXIT_FAILURE);
+
 				} else {
+					//received a message, will respond according to the protocol
 					buffer[value_read] = '\0';
-					//buffer_analyser(buffer, value_read);
-					printf("Writing message back\n");
+					printf("received message\n");
 					log = logger(log, 1);
-					//printf("5\n");
-					fprintf(log, "Socket fd: %d , client IP: %s\n" , client_socks[i] , inet_ntoa(cli_addr.sin_addr));
-					//printf("6\n");
+					fprintf(log, "Socket fd: %d , client IP: %s\n" ,
+					client_socks[i] , inet_ntoa(cli_addr.sin_addr));
+
 					buffer_analyser(buffer, value_read, client_socks[i], log);
 					log = logger(log, 0);
-					//buffer_analyser(buffer, value_read, client_socks[i], log);
-					//value_read = write(client_socks[i], buffer, value_read);
 				}
 			}
 		}
@@ -209,89 +229,109 @@ int main(int argc, char **argv){
 	return 0;
 }
 
+
+/*
+* buffer analyser tokenises a message based on CRLF (carriage return and newline),
+* and will respond will the appropriate messages
+*/
 int buffer_analyser(char *buffer, int buffer_size, int sock_id, FILE *log){
 	int value_read = 0;
-	//int i = 0;
 	char *token;
-	//char message[5];
-	//memset(message, '\0', 5);
-	/*for(i = 0; i < buffer_size; i++){
-		if(buffer[i] == '\r'){
-			printf("Found CR || ");
-		}
-		if(buffer[i] == '\n'){
-			printf("found NL\n");
-		}
-	}*/
-    //const char delim[3] = "\r\n";
-    token = strtok(buffer, "\r\n");
+    token = strtok(buffer, CRLF);
+	BYTE ERRO [MAX_ERROR];
+	memset(ERRO, '\0', MAX_ERROR);
     while(token){
-        //strncpy(token, token, 4);
-		//printf("token: %s && size: %d\n",token, strlen(token));
-		//printf("msg: %s\n",msg);
 
-        if((strncmp(token, PING, 4) == 0) && (strlen(token) == 4)){
-			value_read = write(sock_id, "PONG\r\n", 6);
-			fprintf(log, "SSTP message: %s\n", token);
-			printf("token1\n");
-
-		} else if ((strncmp(token, PONG, 4) == 0) && (strlen(token) == 4)){
-			printf("token2\n");
-			value_read = write(sock_id, "ERRO Only Server can send PONG\r\n", 32);
+        if((strncmp(token, PING, strlen(PING)) == 0) && (strlen(token) == strlen(PING))){
+			//received a PING, respond with a PONG
+			value_read = write(sock_id, PONG, strlen(PONG));
 			fprintf(log, "SSTP message: %s\n", token);
 
-		} else if ((strncmp(token, OKAY, 4) == 0) && (strlen(token) == 4)){
-			printf("token3\n");
-			value_read = write(sock_id, "ERRO Only Sever can send OKAY\r\n", 31);
+		} else if ((strncmp(token, PONG, strlen(PING)) == 0) && (strlen(token) == strlen(PING))){
+			//received a PONG, reply with an error
+			strncpy(ERRO, "ERRO Only Server can send PONG\r\n",
+				strlen("ERRO Only Server can send PONG\r\n"));
+
+			value_read = write(sock_id, ERRO, strlen(ERRO));
 			fprintf(log, "SSTP message: %s\n", token);
 
-		} else if ((strncmp(token, "ERRO", 4) == 0) && (strlen(token) == 4)){
-			printf("token4\n");
-            value_read = write(sock_id, "ERRO must not be sent to the server\r\n", 37);
+		} else if ((strncmp(token, OKAY, strlen(PING)) == 0) && (strlen(token) == strlen(PING))){
+			//received an OKAY, will respond with an Error
+			strncpy(ERRO, "ERRO Only Server can send OKAY\r\n",
+					strlen("ERRO Only Server can send OKAY\r\n"));
+
+			value_read = write(sock_id, ERRO, strlen(ERRO));
 			fprintf(log, "SSTP message: %s\n", token);
 
-		} else if(strncmp(token, "SOLN", 4) == 0){
+		} else if ((strncmp(token, "ERRO", strlen(PING)) == 0) && (strlen(token) == strlen(PING))){
+			//received an ERRO, will respond with an Error
+			strncpy(ERRO, "ERRO Only Server can send ERRO\r\n",
+					strlen("ERRO Only Server can send ERRO\r\n"));
+
+			value_read = write(sock_id, ERRO, strlen(ERRO));
 			fprintf(log, "SSTP message: %s\n", token);
-			if(strlen(token) <= 5){
-				printf("worng message\n");
-				value_read = write(sock_id, "ERRO message is not complete\r\n", 30);
-				token = strtok(NULL, "\r\n");
+
+		} else if(strncmp(token, SOLN, strlen(PING)) == 0){
+			//received an SOLN, will respond with with a proof of work verification
+			fprintf(log, "SSTP message: %s\n", token);
+			if(strlen(token) <= (SOLN_LENGTH - 4)){
+				//incomplete SOLN message
+				strncpy(ERRO, "ERRO incomplete SOLN message\r\n",
+						strlen("ERRO incomplete SOLN message\r\n"));
+
+				value_read = write(sock_id, ERRO, strlen(ERRO));
+				token = strtok(NULL, CRLF);
 				continue;
 			}
-			//printf("SOlution Found\r\n");
-			if(SOLN_parser(token)){
-				value_read = write(sock_id, "OKAY\r\n", 6);
+
+			if(SOLN_parser(token) == 1){
+				//parse solution message and verify it
+				value_read = write(sock_id, OKAY, strlen(OKAY));
+
 			} else {
-				value_read = write(sock_id, "ERRO The proof of work was incorrect\r\n", 38);
-			}
-			//fprintf(log, "SSTP message: %s\n", token);
+				//wrong proof of work
+				strncpy(ERRO, "ERRO The proof of work was incorrect\r\n",
+						strlen("ERRO The proof of work was incorrect\r\n"));
 
-		} else if(strncmp(token, "WORK", 4) == 0){
+				value_read = write(sock_id, ERRO, strlen(ERRO));
+			}
+
+		} else if(strncmp(token, WORK, strlen(PING)) == 0){
+			//received an WORK, will respond with with a proof of work
 			fprintf(log, "SSTP message: %s\n", token);
-			//printf("Work Found\r\n");
-			if(strlen(token) <= 5){
-				printf("worng message\n");
-				value_read = write(sock_id, "ERRO message is not complete\r\n", 30);
-				token = strtok(NULL, "\r\n");
+			if(strlen(token) <= (SOLN_LENGTH - 4)){
+				//work message is incomplete
+				strncpy(ERRO, "ERRO incomplete WORK message\r\n",
+						strlen("ERRO incomplete WORK message\r\n"));
+				value_read = write(sock_id, ERRO, strlen(ERRO));
+				token = strtok(NULL, CRLF);
 				continue;
 			}
-			if(work_queue->foot && work_queue->foot->queue_no >= 10){
-				write(sock_id, "ERRO work_queue is full\r\n",strlen("ERRO work_queue is full\r\n"));
+
+			if(work_queue->foot && work_queue->foot->queue_no >= MAX_WORK){
+				//queue is at full capacity
+				strncpy(ERRO, "ERRO work_queue is full\r\n", strlen("ERRO work_queue is full\r\n"));
+				value_read = write(sock_id, ERRO, strlen(ERRO));
 			}else {
+				//have room for the work message, parse and add it to the queue
 				WORK_parser(token, sock_id);
 			}
 
-		} else if(strncmp(token, "ABRT", 4) == 0){
+		} else if(strncmp(token, ABRT, strlen(ABRT)) == 0){
+			//client requests abort for all its work messages
 			fprintf(log, "SSTP message: %s\n", token);
-			printf("ABRT Found\r\n");
-			value_read = write(sock_id, "OKAY\r\n", 6);
+			value_read = write(sock_id, OKAY, strlen(OKAY));
+			set_work_abrt(work_queue, sock_id);
 
 		} else {
+			//all other messages are of the wrong type
 			fprintf(log, "SSTP message: %s\n", token);
-			value_read = write(sock_id, "ERRO Message was not correct\r\n", 30);
-			printf("ERRO Message not correct\r\n");
+			strncpy(ERRO, "ERRO message was not recognised\r\n",
+					strlen("ERRO message was not recognised\r\n"));
+
+			value_read = write(sock_id, ERRO, strlen(ERRO));
 		}
-		token = strtok(NULL, "\r\n");
+		token = strtok(NULL, CRLF);
 		fflush(stdout);
     }
 	return 0;
@@ -299,25 +339,21 @@ int buffer_analyser(char *buffer, int buffer_size, int sock_id, FILE *log){
 
 
 FILE* logger(FILE *fp, int to_do){
-	//printf("Hello\n");
 	if(to_do){
 		//open file to write
-		//printf("hel\n");
 		fp = fopen(LOG, "a");
-		//printf("1\n");
 		if(!fp){
 			printf("Couldn't log\n");
 			exit(EXIT_FAILURE);
 		}
-		//printf("56\n");
 		time_t rawtime;
 		struct tm *info;
-		//char buffer[80];
 
 		time( &rawtime );
 		info = localtime( &rawtime );
 		fprintf(fp,"Time: %s", asctime(info));
 	} else {
+		//close the file
 		fprintf(fp,"\n-----------------------------\n\n");
 		fclose(fp);
 	}
@@ -325,113 +361,103 @@ FILE* logger(FILE *fp, int to_do){
 }
 
 
+
+/*
+* SOLN_parser takes a solution message as a string and extracts difficulty,
+* seed and the nonce, and will verifies the soluton/ proof of work through hash_checker
+* and returns a boolean depending on the correctness of the proof of work
+*/
 int SOLN_parser(char *line){
 	uint32_t diff;
-	char *lineStart = line + 5; // where the difficulty starts
-
-	//reading in the difficulty
+	char *lineStart = line + HEADER_LEN; // where the difficulty starts
 	sscanf(lineStart, "%x\n", &diff);
-	//printf("Number: %" PRIu32 "\n",difficulty);
 
 	//getting alpha
 	uint32_t copy = diff;
 	uint32_t alpha = (copy >> 24); //getting the first 8 bits
-	//printf("alpha; %d\n\n", alpha);
-
-
-	/*BYTE alpha1[1];
-	sscanf(lineStart, "%2hhx", &alpha1[0]);
-	print_uint2(alpha1);*/
 
 	//getting beta
-	BYTE beta1[32];
+	BYTE beta1[UINT256];
 	uint256_init(beta1);
+
+	 //skipping the first byte of the difficulty to the where beta starts
 	lineStart += 2;
-	int j = 29;
-	while(j < 32){
+	int j = 29;//beta only occupies the last bytes of the array, i.e 29, 30, 31
+	while(j < UINT256){
 		sscanf(lineStart, "%2hhx", &beta1[j]);
 		lineStart += 2;
 		j++;
 	}
-	/*printf("beta: ");
-	print_uint25(beta1);
-	printf("\n");*/
 
-	//target calculation
-	BYTE base[32];
+	/*target calculation*/
+
+	//making a base of 2
+	BYTE base[UINT256];
 	uint256_init(base);
-
 	base[31] = 0x2;
 
-	BYTE res[32];
+	BYTE res[UINT256];
 	uint256_init(res);
+
+	//the given formula uses 8 and 3
 	uint32_t expo = 8*(alpha - 3);
 	uint256_exp(res, base, expo);
-	//print_uint256(res);
 
-	BYTE target[32];
+	BYTE target[UINT256];
 	uint256_init(target);
 
 	uint256_mul(target, beta1, res);
-	/*printf("target: ");
-	//print_uint256(target);
-	printf("\n");*/
-
 
 	//seed parsing
 	lineStart = line + 14; //where the seed starts
-	BYTE seed[32];
+	BYTE seed[UINT256];
 	int i = 0;
-	while(i < 32){
+	while(i < UINT256){
 		sscanf(lineStart, "%2hhx", &seed[i]);
 		lineStart += 2;
 		i++;
 	}
-	//print_uint256(seed);
 
 	//getting the nonce for the prrof of work
-	uint64_t nonce;
-	sscanf((lineStart+1), "%lx", &nonce);
-	//printf("NONCE: %lx \n",nonce);
-
-	BYTE NONCE[32];
+	BYTE NONCE[UINT256];
 	uint256_init(NONCE);
-	//uint_init(NONCE, 8);
-	i = 24;
+	i = 24;//nonce is only 8 bytes long, so it only occupies from byte 24-31
 	lineStart += 1;
-	while(i < 32){
+	while(i < UINT256){
 		sscanf(lineStart, "%2hhx", &NONCE[i]);
 		lineStart += 2;
 		i++;
 	}
-	//print_uint256(NONCE);
+
 
 	//concatenation of seed and nonce
+	//40 is the length of the seed (32) + length of the nonce (8)
 	BYTE solution[40];
 	uint_init(solution, 40);
 	for(i = 0; i < 40; i++){
-		if(i < 32){
+		if(i < UINT256){
+			//the first 32 cells are occupised by the seed
 			solution[i] = seed[i];
 		} else {
+			//the last 8 bytes are occupised by the nonce
 			solution[i] = NONCE[i - 8];
 		}
 	}
-	//printf("solution: \n");
-	//print_uint26(solution, 40);
 
 	return hash_checker(solution, target);
 }
 
+/*
+* checks a proof of work using sha256
+*/
 int hash_checker(BYTE *solution, BYTE *target){
-	BYTE hash1[32];
+	BYTE hash1[UINT256];
 	uint256_init(hash1);
 
 	SHA256_CTX ctx;
 	sha256_init(&ctx);
 	sha256_update(&ctx, solution, 40);
 	sha256_final(&ctx, hash1);
-	//printf("1st hash: \n");
-	//print_uint256(hash1);
 
 	BYTE hash2[32];
 	uint256_init(hash2);
@@ -439,25 +465,16 @@ int hash_checker(BYTE *solution, BYTE *target){
 	sha256_update(&ctx, hash1, 32);
 	sha256_final(&ctx, hash2);
 
-	//print_uint256(target);
-	//print_uint256(hash2);
 	if(sha256_compare(target, hash2) == 1){
-		//printf("\nhooray!\n");
 		return 1;
 	} else {
-		//printf("nope\n");
 		return 0;
 	}
 }
-void print_uint26 (BYTE *uint256, size_t length) {
-    printf ("0x");
-    size_t i = 0;
-    for (i = 0; i < length; i++) {
-        printf ("%02x", uint256[i]);
-    }
-    printf("\n");
-}
 
+/*
+* initialises a byte array of specified size
+*/
 void uint_init(BYTE *uint320, size_t length){
 	if (uint320 == NULL) {
         return;
@@ -469,50 +486,54 @@ void uint_init(BYTE *uint320, size_t length){
 	}
 }
 
+/*
+* WORK_parser works almost the same way as SOLN_parser works,
+* However, once it parse a work it adds it to the queue for work thread to work on it.
+* I tried making a general purpose function but it kept failing and due to lack of time had to
+* rely on two different function to do the job
+*/
 void WORK_parser(char *line, int client_sock){
 	work_t *work = NULL;
 	work = (void *) malloc (sizeof(work_t));
 	assert(work != NULL);
 
-	char *lineStart = line + 5; // where the difficulty starts
+	char *lineStart = line + HEADER_LEN; // where the difficulty starts
 	sscanf(lineStart, "%x", &(work->difficulty));
-	//printf("Difficulty: %x\n", work->difficulty);
 
 	work->alpha = work->difficulty >> 24;
-	//printf("Difficulty: %x\n", work->alpha);
 
 	//beta processing
 	uint256_init(work->beta);
-	int i = 29;
-	lineStart += 2;
-	while(i < 32){
+	int i = 29; //beta only occupies the last bytes of the array, i.e 29, 30, 31
+	lineStart += 2; //skipping the first byte of diffciulty
+	while(i < UINT256){
 		sscanf(lineStart, "%2hhx", &(work->beta[i]));
 		i++;
 		lineStart += 2;
 	}
-	//printf("beta: \n");
-	//print_uint256(work->beta);
 
-	//processing target
-	BYTE base[32];
+	/*processing target*/
+
+	BYTE base[UINT256];
 	uint256_init(base);
 	base[31] = 0x2;
 
-	BYTE res[32];
+	BYTE res[UINT256];
 	uint256_init(res);
+	//the formula given from the specs
 	uint32_t expo = 8*(work->alpha - 3);
 	uint256_exp(res, base, expo);
 
 	uint256_init(work->target);
 	uint256_mul(work->target, work->beta, res);
-	//printf("target: \n");
-	//print_uint256(work->target);
 
 	//seed processing
 	uint256_init(work->seed);
 	i = 0;
+	//where the seed starts from the beginning of the message line,
+	//skipping the previous 14 characters in the message
 	lineStart = 14 + line;
-	while(i < 32){
+	while(i < UINT256){
 		sscanf(lineStart, "%2hhx", &(work->seed[i]));
 		lineStart += 2;
 		i++;
@@ -522,75 +543,84 @@ void WORK_parser(char *line, int client_sock){
 
 	//processing nonce
 	uint256_init(work->start_nonce);
-	i = 24;
+	i = 24; //nonce only occupies the last 8 bytes of the array, i.e 24-31
 	lineStart += 1;
-	while(i < 32){
+	while(i < UINT256){
 		sscanf(lineStart, "%2hhx", &(work->start_nonce[i]));
 		lineStart += 2;
 		i++;
 	}
-	//printf("nonce: \n");
-	//print_uint256(work->start_nonce);
 
 	//getting number of threads on the work
 	lineStart++;
 	sscanf(lineStart, "%d", &work->work_no);
-	//printf("work no: %d\n", work->work_no);
+
 	work->client_sock_id = client_sock;
 	work->abrt = 0;
+
+	//add to the queue, update the number of the works in the queue
 	insert_at_foot(work_queue, *work);
 	update_queue_no(work_queue);
-	//printf("1\n");
-	work_func();
-	//update_queue_no(work_queue);
 }
 
 
+/*
+* this is the function that is passed to the thread,
+* it constantly checks for new works  to process and it runs as long as the server is running
+*/
 void *work_func(){
 	assert(work_queue != NULL);
+
+	//increment the nonce by 1 every time
     BYTE add_1[32];
 	uint256_init(add_1);
 	add_1[31] = 0x1;
-	//printf("2\n");
+
+	//concatenation of seed + nonce, 32 of seed + 8 bytes of nonce
 	BYTE solution[40];
 	bzero(solution,40);
 
 	work_t work;
 	int sol_found = 0, i = 0;
-	int j = 0;
-	while(j < 10){
-		//printf("3\n");
-		j++;
+
+	while(TRUE){
+		//keeps the thread running waiting for new works to come.
+		//ends when server shuts off
+
 		if(!is_empty_list(work_queue)){
+			//new work in the queue
 			work = get_head(work_queue);
 
 			if(work.abrt){
-				//free(work);
-				update_queue_no(work_queue);
+				//checks if the client has aborted the work or disconnected
+				//removes the aborted work
+				work_queue = get_tail(work_queue);
 				continue;
 			}
 			uint256_init(solution);
 
 			sol_found = 0;
-			for(i = 0; i < 32; i++){
+			for(i = 0; i < UINT256; i++){
+				//initialise the solution with the 32 bytes of seed
 				solution[i] = work.seed[i];
 			}
 
 			while(!sol_found){
+				//while a solution is not found, increment the nonce to find one
 				if(work_queue->head->data.abrt){
-					work_queue = clear_queue(work_queue, work.client_sock_id);
-					//work = NULL;
+					//client has aborted this work
 					break;
 				}
-				for(i = 32; i < 40; i++){
+				for(i = UINT256; i < 40; i++){
+					//fill the last 8 bytes of the solution with the new incremented nonce
 					solution[i] = work.start_nonce[i - 8];
 				}
+
 				if(hash_checker(solution, work.target)){
+					//if a proof of work is found, send a message to the client
+					//update the queue
 					send_client_Message(work);
 					sol_found = 1;
-					//printf("It did work\n");
-					//print_uint256(work.start_nonce);
-					//work_queue = clear_queue(work_queue);
 					work_queue = get_tail(work_queue);
 					update_queue_no(work_queue);
 				} else {
@@ -602,42 +632,55 @@ void *work_func(){
 }
 
 
+/*
+* sends a message to the client with the correct proof of work
+*/
 void send_client_Message(work_t work){
 	//assert(work != NULL);
 	if(work.abrt){
+		//checks if the client hasn't aborted or disconnected
 		work_queue = clear_queue(work_queue, work.client_sock_id);
-		//work = NULL;
 		return;
 	}
-	BYTE MESSAGE[98];
-	memset(MESSAGE, '\0', 98);
+
+	BYTE MESSAGE[SOLN_LENGTH];
+	memset(MESSAGE, '\0', SOLN_LENGTH);
 	BYTE *msg_ptr = MESSAGE;
-	strncpy(msg_ptr, "SOLN ", strlen("SOLN "));
-	msg_ptr += strlen("SOLN ");
-	//write(work.client_sock_id, "IT does work!!!\r\n", 17);
-	///write(work.client_sock_id, );
+
+	//writing the message header
+	strncpy(msg_ptr, SOLN, strlen(SOLN));
+	msg_ptr += strlen(SOLN);
+
+	strncpy(msg_ptr, " ", strlen(" "));
+	msg_ptr += strlen(" ");
+
+	//write the difficulty
 	sprintf(msg_ptr, "%x ", work.difficulty);
-	msg_ptr += 9;
+	msg_ptr += 9; // 9 = length of difficulty + space
+
+	//writing the seed
 	int i = 0;
-	while(i < 32){
+	while(i < UINT256){
 		sprintf(msg_ptr, "%02x", work.seed[i]);
 		i++;
 		msg_ptr += 2;
 	}
-	//printf("char: %c", *msg_ptr);
-	//msg_ptr += 1;
+
+	//writing a space between seed and nonce
 	*msg_ptr = ' ';
 	msg_ptr++;
-	i = 24;
-	while(i < 32){
+
+	//writing nonce
+	i = 24; // nonce only occupies 8 bytes, i.e cells 24-31
+	while(i < UINT256){
 		sprintf(msg_ptr, "%02x", work.start_nonce[i]);
 		i++;
 		msg_ptr += 2;
 	}
+
+	//writing crlf
 	*msg_ptr = '\r';
 	*(msg_ptr + 1) = '\n';
-	//MESSAGE[95] = '\r';
-	//MESSAGE[96] = '\n';
-	//printf("Message: %s", MESSAGE);
+
 	write(work.client_sock_id, MESSAGE, strlen(MESSAGE));
 }
