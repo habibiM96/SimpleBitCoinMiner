@@ -3,7 +3,12 @@
 #include <stdio.h>
 #include <stdint.h>
 
+#ifndef __BYTEDEF__
+#define __BYTEDEF__
 typedef unsigned char BYTE;
+#endif
+
+//typedef unsigned char BYTE;
 
 static inline void uint256_init (BYTE *uint256) {
     if (uint256 == NULL) {
