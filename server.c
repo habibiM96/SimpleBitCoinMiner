@@ -63,6 +63,9 @@ void WORK_parser(char *line, int client_sock);
 void send_client_Message(work_t work);
 void *work_func();
 int crlfConfirm(char *msg);
+void registerBuffer(buffer_t *buffers, int client_sock);
+void deregisterBuffer(buffer_t *buffers, int client_sock);
+void doCache(buffer_t *buffers, int client_sock, char *buffer, FILE *fp);
 
 /******************************* Functions ***********************/
 int main(int argc, char **argv){
@@ -71,7 +74,8 @@ int main(int argc, char **argv){
 	int opt = TRUE;
 	int listener_socket = -1, clilen = -1, new_sockfd = -1, client_socks[MAX_CLIENT],
 	activity = 0, value_read = -1, i = 0, server_portno, max_sd = 0;
-
+	int client_count = 0;
+	buffer_t buffers[MAX_CLIENT];
 	char buffer[MAX_BUFFER]; //buffer where  clients write their message in
 	struct sockaddr_in serv_addr, cli_addr;
 
@@ -89,7 +93,10 @@ int main(int argc, char **argv){
 	}
 
 	work_queue = make_empty_list();
-
+	for(i = 0; i < MAX_CLIENT; i++){
+		buffers[i].client_id = -1;
+		memset(buffers[i].buff, '\0', MAX_BUFFER);
+	}
 	//spinning up the work thread
 	pthread_create(&tid, NULL, work_func, NULL);
 
@@ -176,7 +183,7 @@ int main(int argc, char **argv){
 			fprintf(log, "New Connection, Socket fd: %d , client IP:  %s\n" ,
 					new_sockfd , inet_ntoa(cli_addr.sin_addr));
 			log = logger(log, 0);
-
+			registerBuffer(buffers, new_sockfd);
 			for(i = 0; i < MAX_CLIENT; i++){
 				//adding the new socket to the list
 				if(client_socks[i] == 0){
@@ -202,7 +209,7 @@ int main(int argc, char **argv){
 					fprintf(log, "Client socket: %d disconnected , Client IP: %s\n"
 								,client_socks[i], inet_ntoa(cli_addr.sin_addr));
 					log = logger(log, 0);
-
+					deregisterBuffer(buffers, client_socks[i]);
 					set_work_abrt(work_queue, client_socks[i]);
 					close(client_socks[i]);
 					client_socks[i] = 0;
@@ -219,8 +226,8 @@ int main(int argc, char **argv){
 					log = logger(log, 1);
 					fprintf(log, "Socket fd: %d , client IP: %s\n" ,
 					client_socks[i] , inet_ntoa(cli_addr.sin_addr));
-
-					buffer_analyser(buffer, value_read, client_socks[i], log);
+					doCache(buffers, client_socks[i], buffer, log);
+					//buffer_analyser(buffer, value_read, client_socks[i], log);
 					log = logger(log, 0);
 				}
 			}
@@ -236,10 +243,9 @@ int main(int argc, char **argv){
 * and will respond will the appropriate messages
 */
 int buffer_analyser(char *buffer, int buffer_size, int sock_id, FILE *log){
-	int value_read = 0;
+	int value_read = 0, length_p = 0;
 	BYTE ERRO [MAX_ERROR];
 	memset(ERRO, '\0', MAX_ERROR);
-	//printf("s: %s", buffer);
 	if(!crlfConfirm(buffer)){
 		fprintf(log, "SSTP message: %s\n", buffer);
 		strncpy(ERRO, "ERRO message did not end with crlf\r\n",
@@ -248,9 +254,14 @@ int buffer_analyser(char *buffer, int buffer_size, int sock_id, FILE *log){
 		value_read = write(sock_id, ERRO, strlen(ERRO));
 		return 0;
 	}
+	/*i keep a unchanged copy of the buffer, because strtok changes the
+	* entire buffer*/
+	char bufferCPY[MAX_BUFFER], *cpy;
+	strncpy(bufferCPY, buffer, strlen(buffer));
+	cpy = &(bufferCPY);
+
 	char *token;
     token = strtok(buffer, CRLF);
-	//printf("%c s", buffer[strlen(buffer)]);
     while(token){
 
         if((strncmp(token, PING, strlen(PING)) == 0) && (strlen(token) == strlen(PING))){
@@ -344,6 +355,20 @@ int buffer_analyser(char *buffer, int buffer_size, int sock_id, FILE *log){
 		}
 		token = strtok(NULL, CRLF);
 		fflush(stdout);
+
+		if(token){
+			//if more tokens, make sure they end with the delimiter, do this check on the original unchanged message
+			length_p += strlen(token) + 2;
+			if(length_p < (strlen(bufferCPY) - 2) && !crlfConfirm(cpy + length_p)){
+				fprintf(log, "SSTP message: %s\n", buffer);
+				strncpy(ERRO, "ERRO message did not end with crlf\r\n",
+						strlen("ERRO message did not end with crlf\r\n"));
+
+				value_read = write(sock_id, ERRO, strlen(ERRO));
+				return 0;
+			}
+		}
+
     }
 	return 0;
 }
@@ -713,4 +738,49 @@ int crlfConfirm(char *msg){
 		}
 	}
 	return 0;
+}
+
+void registerBuffer(buffer_t *buffers, int client_sock){
+	int i = 0;
+	for(i = 0; i < MAX_CLIENT; i++){
+		if(buffers[i].client_id < 0){
+			buffers[i].client_id = client_sock;
+			memset(buffers[i].buff, '\0', MAX_BUFFER);
+			break;
+		}
+	}
+}
+
+void deregisterBuffer(buffer_t *buffers, int client_sock){
+	int i = 0;
+	for(i = 0; i < MAX_CLIENT; i++){
+		if(buffers[i].client_id  == client_sock){
+			buffers[i].client_id = -1;
+			memset(buffers[i].buff, '\0', MAX_BUFFER);
+			break;
+		}
+	}
+}
+
+void doCache(buffer_t *buffers, int client_sock, char *buffer, FILE *fp){
+	int i = 0, j = 0;
+
+	for(i = 0; i < MAX_CLIENT; i++){
+		if(buffers[i].client_id  == client_sock){
+			int empty_size = MAX_BUFFER - strlen(buffers[i].buff);
+			if(strlen(buffer) > (empty_size - 1)){
+				strncat(buffers[i].buff, buffer, empty_size - 1);
+			} else {
+				strncat(buffers[i].buff, buffer, strlen(buffer));
+			}
+			break;
+		}
+	}
+	if(crlfConfirm(buffers[i].buff)){
+		buffer_analyser(buffers[i].buff, strlen(buffers[i].buff), buffers[i].client_id, fp);
+		memset(buffers[i].buff, '\0', MAX_BUFFER);
+	} else if(strlen(buffers[i].buff) == (MAX_BUFFER - 1)){
+		buffer_analyser(buffers[i].buff, strlen(buffers[i].buff), buffers[i].client_id, fp);
+		memset(buffers[i].buff, '\0', MAX_BUFFER);
+	}
 }
