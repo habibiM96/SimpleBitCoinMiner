@@ -764,9 +764,10 @@ void deregisterBuffer(buffer_t *buffers, int client_sock){
 
 void doCache(buffer_t *buffers, int client_sock, char *buffer, FILE *fp){
 	int i = 0, j = 0;
-
+	fflush(stdout);
 	for(i = 0; i < MAX_CLIENT; i++){
 		if(buffers[i].client_id  == client_sock){
+			//printf("cache: %s", buffers[i].buff);
 			int empty_size = MAX_BUFFER - strlen(buffers[i].buff);
 			if(strlen(buffer) > (empty_size - 1)){
 				strncat(buffers[i].buff, buffer, empty_size - 1);
@@ -776,6 +777,8 @@ void doCache(buffer_t *buffers, int client_sock, char *buffer, FILE *fp){
 			break;
 		}
 	}
+	//printf("cache1: %s", buffers[i].buff);
+	fflush(stdout);
 	if(crlfConfirm(buffers[i].buff)){
 		buffer_analyser(buffers[i].buff, strlen(buffers[i].buff), buffers[i].client_id, fp);
 		memset(buffers[i].buff, '\0', MAX_BUFFER);
