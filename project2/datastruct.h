@@ -23,4 +23,10 @@ typedef struct{
 	int work_no;
 } work_t;
 
+
+typedef struct{
+    int client_id;
+    char buff[256];
+} buffer_t;
+
 #endif
