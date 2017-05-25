@@ -1,6 +1,7 @@
 /* Project 2,
 By Ashkan Habibi,
 student ID: 758744
+I used GeeksForGeeks multi client server as a reference
 */
 
 /******************************* libraries ***********************/
@@ -61,7 +62,7 @@ int hash_checker(BYTE *solution, BYTE *target);
 void WORK_parser(char *line, int client_sock);
 void send_client_Message(work_t work);
 void *work_func();
-
+int crlfConfirm(char *msg);
 
 /******************************* Functions ***********************/
 int main(int argc, char **argv){
@@ -236,10 +237,20 @@ int main(int argc, char **argv){
 */
 int buffer_analyser(char *buffer, int buffer_size, int sock_id, FILE *log){
 	int value_read = 0;
-	char *token;
-    token = strtok(buffer, CRLF);
 	BYTE ERRO [MAX_ERROR];
 	memset(ERRO, '\0', MAX_ERROR);
+	//printf("s: %s", buffer);
+	if(!crlfConfirm(buffer)){
+		fprintf(log, "SSTP message: %s\n", buffer);
+		strncpy(ERRO, "ERRO message did not end with crlf\r\n",
+				strlen("ERRO message did not end with crlf\r\n"));
+
+		value_read = write(sock_id, ERRO, strlen(ERRO));
+		return 0;
+	}
+	char *token;
+    token = strtok(buffer, CRLF);
+	//printf("%c s", buffer[strlen(buffer)]);
     while(token){
 
         if((strncmp(token, PING, strlen(PING)) == 0) && (strlen(token) == strlen(PING))){
@@ -637,6 +648,7 @@ void *work_func(){
 */
 void send_client_Message(work_t work){
 	//assert(work != NULL);
+	usleep(50);
 	if(work.abrt){
 		//checks if the client hasn't aborted or disconnected
 		work_queue = clear_queue(work_queue, work.client_sock_id);
@@ -681,6 +693,24 @@ void send_client_Message(work_t work){
 	//writing crlf
 	*msg_ptr = '\r';
 	*(msg_ptr + 1) = '\n';
-
+	if(work.abrt){
+		//checks if the client hasn't aborted or disconnected
+		work_queue = clear_queue(work_queue, work.client_sock_id);
+		return;
+	}
 	write(work.client_sock_id, MESSAGE, strlen(MESSAGE));
+}
+
+int crlfConfirm(char *msg){
+	//char *ch = msg;
+	char *crPos = NULL, *nlPos = NULL;
+	crPos = memchr(msg, '\r', strlen(msg));
+	nlPos = memchr(msg, '\n', strlen(msg));
+
+	if(crPos != NULL && nlPos != NULL){
+		if(crPos == (nlPos - 1)){
+			return 1;
+		}
+	}
+	return 0;
 }
