@@ -268,6 +268,7 @@ int buffer_analyser(char *buffer, int buffer_size, int sock_id, FILE *log){
 			//received a PING, respond with a PONG
 			value_read = write(sock_id, PONG, strlen(PONG));
 			fprintf(log, "SSTP message: %s\n", token);
+			fprintf(log, "SSTP respone: PONG ,Server IP: 0.0.0.0\n");
 
 		} else if ((strncmp(token, PONG, strlen(PING)) == 0) && (strlen(token) == strlen(PING))){
 			//received a PONG, reply with an error
@@ -276,6 +277,7 @@ int buffer_analyser(char *buffer, int buffer_size, int sock_id, FILE *log){
 
 			value_read = write(sock_id, ERRO, strlen(ERRO));
 			fprintf(log, "SSTP message: %s\n", token);
+			fprintf(log, "SSTP respone: %s ,Server IP: 0.0.0.0\n", "ERRO Only Server can send PONG");
 
 		} else if ((strncmp(token, OKAY, strlen(PING)) == 0) && (strlen(token) == strlen(PING))){
 			//received an OKAY, will respond with an Error
@@ -284,6 +286,7 @@ int buffer_analyser(char *buffer, int buffer_size, int sock_id, FILE *log){
 
 			value_read = write(sock_id, ERRO, strlen(ERRO));
 			fprintf(log, "SSTP message: %s\n", token);
+			fprintf(log, "SSTP respone: %s ,Server IP: 0.0.0.0\n", "ERRO Only Server can send OKAY");
 
 		} else if ((strncmp(token, "ERRO", strlen(PING)) == 0) && (strlen(token) == strlen(PING))){
 			//received an ERRO, will respond with an Error
@@ -292,6 +295,7 @@ int buffer_analyser(char *buffer, int buffer_size, int sock_id, FILE *log){
 
 			value_read = write(sock_id, ERRO, strlen(ERRO));
 			fprintf(log, "SSTP message: %s\n", token);
+			fprintf(log, "SSTP respone: %s ,Server IP: 0.0.0.0\n", "ERRO Only Server can send ERRO");
 
 		} else if(strncmp(token, SOLN, strlen(PING)) == 0){
 			//received an SOLN, will respond with with a proof of work verification
@@ -309,11 +313,12 @@ int buffer_analyser(char *buffer, int buffer_size, int sock_id, FILE *log){
 			if(SOLN_parser(token) == 1){
 				//parse solution message and verify it
 				value_read = write(sock_id, OKAY, strlen(OKAY));
-
+				fprintf(log, "SSTP respone: OKAY, Server IP: 0.0.0.0\n");
 			} else {
 				//wrong proof of work
 				strncpy(ERRO, "ERRO The proof of work was incorrect\r\n",
 						strlen("ERRO The proof of work was incorrect\r\n"));
+				fprintf(log, "SSTP respone: %s ,Server IP: 0.0.0.0\n", "ERRO The proof of work was incorrect");
 
 				value_read = write(sock_id, ERRO, strlen(ERRO));
 			}
@@ -334,6 +339,7 @@ int buffer_analyser(char *buffer, int buffer_size, int sock_id, FILE *log){
 				//queue is at full capacity
 				strncpy(ERRO, "ERRO work_queue is full\r\n", strlen("ERRO work_queue is full\r\n"));
 				value_read = write(sock_id, ERRO, strlen(ERRO));
+				fprintf(log, "SSTP respone: %s ,Server IP: 0.0.0.0\n", "ERRO work_queue is full");
 			}else {
 				//have room for the work message, parse and add it to the queue
 				WORK_parser(token, sock_id);
@@ -342,6 +348,7 @@ int buffer_analyser(char *buffer, int buffer_size, int sock_id, FILE *log){
 		} else if(strncmp(token, ABRT, strlen(ABRT)) == 0){
 			//client requests abort for all its work messages
 			fprintf(log, "SSTP message: %s\n", token);
+			fprintf(log, "SSTP respone: OKAY ,Server IP: 0.0.0.0\n");
 			value_read = write(sock_id, OKAY, strlen(OKAY));
 			set_work_abrt(work_queue, sock_id);
 
@@ -350,7 +357,7 @@ int buffer_analyser(char *buffer, int buffer_size, int sock_id, FILE *log){
 			fprintf(log, "SSTP message: %s\n", token);
 			strncpy(ERRO, "ERRO message was not recognised\r\n",
 					strlen("ERRO message was not recognised\r\n"));
-
+			fprintf(log, "SSTP respone: %s ,Server IP: 0.0.0.0\n", "ERRO message was not recognised");
 			value_read = write(sock_id, ERRO, strlen(ERRO));
 		}
 		token = strtok(NULL, CRLF);
@@ -363,7 +370,7 @@ int buffer_analyser(char *buffer, int buffer_size, int sock_id, FILE *log){
 				fprintf(log, "SSTP message: %s\n", buffer);
 				strncpy(ERRO, "ERRO message did not end with crlf\r\n",
 						strlen("ERRO message did not end with crlf\r\n"));
-
+				fprintf(log, "SSTP respone: %s ,Server IP: 0.0.0.0\n", "ERRO message did not end with crlf");
 				value_read = write(sock_id, ERRO, strlen(ERRO));
 				return 0;
 			}
@@ -723,6 +730,12 @@ void send_client_Message(work_t work){
 		work_queue = clear_queue(work_queue, work.client_sock_id);
 		return;
 	}
+	FILE *log;
+	log = logger(log, 1);
+	fprintf(log, "Response to work Message of client %d: %sserver IP:  0.0.0.0\n" ,
+			work.client_sock_id, MESSAGE);
+	log = logger(log, 0);
+
 	write(work.client_sock_id, MESSAGE, strlen(MESSAGE));
 }
 
